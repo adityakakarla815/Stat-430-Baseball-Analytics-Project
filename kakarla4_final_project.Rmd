@@ -1,0 +1,260 @@
+```{r}
+library(tidyverse)
+library(glmnet)
+library(caret)
+library(pROC)
+source("modules.R")
+library(rpart)
+library(tree)
+library(nnet)
+```
+
+
+```{r}
+colnames(final_baseball_430_csv)
+```
+```{r}
+variables <- colnames(final_baseball_430_csv %>% select("release_spin_rate", "launch_speed", "release_speed", "launch_angle", "hc_x", "hc_y", "pfx_x", 
+                                  "pfx_z", "plate_x", "plate_z"))
+```
+```{r}
+unique(final_baseball_430_csv$events)
+```
+
+
+```{r}
+library(shiny)
+library(tidyverse)
+library(bslib)
+library(DT)
+library(mgcv)
+
+# Define UI for application
+ui <- fluidPage(
+  titlePanel("Predicting Batting Outcome Probability between Seasons 2017 to 2022"),
+  tabsetPanel(
+    tabPanel("Description",
+             tags$p("The following Shiny App gives an analysis of different batting outcomes in the seasons of 2017-2022. Underneath this tab is a overview of the dataset that we used in building the rest of the functionalities for this app."),
+             tags$p("The first tab, Plot, shows a 
+                    plot of plays for a selected batting outcome, batter, and pitch type. Users have the option to select which variables they 
+                    want to plot (launch speed vs. launch angle, release speed vs. release spin rate, etc.). The plot shows which plays 
+                    resulted in the selected batting outcome vs. the ones that have not resulted in the selected batting outcome."),
+             tags$p("The second tab shows the calculation for the probability of a selected batting outcome for this time period given the variables 
+                    from our dataset. Users can select which variables they want to build a prediction model off of and are able to calculate
+                    the probability of a batting outcome using sliders for each variable. We also dpeicts a confusion matrix, diffrent erro metrics, and and ROC curve for the model"),
+             tags$p("The third tab gives a descriptive summary of the model that users want to build. Similar to the second tab, users can
+                    select which variables are to be included in the predictive model for the probability of the selected batting outcome. However in this you can choose the type of model you are trying to fit - logisiic or multinomial"),
+             tags$p("Enjoy!"),
+             tags$p("Author: Aniketh Chedalla, Collaborators: Aditya Kakarla"),
+             tags$h4("Dataset Overview"),
+             dataTableOutput("baseballDataset")
+             ),
+    tabPanel("Plot",
+             sidebarLayout(
+               sidebarPanel(
+                 sliderInput("yearRange",
+                             "Select Range of Years:",
+                             min = 2017,
+                             max = 2022,
+                             value = c(2017, 2022)),
+                 selectizeInput("Player", "Player Name", choices = NULL, multiple = FALSE, options = list(placeholder = "Select or type of player name")),
+                 selectInput("pitchType", "Pitch Type", choices = NULL),
+                 selectInput("Var1", "Variable 1", choices = NULL),
+                 selectInput("Var2", "Variable 2", choices = NULL),
+                 selectInput("selectedEvent", "Select Event to Display", choices = NULL)
+               ),
+               mainPanel(plotOutput("distPlot"))
+             )
+    ),
+    tabPanel("Outcome Probability Calculation",
+            sidebarLayout(
+              sidebarPanel(
+                selectInput("selectedEvent", "Choose Event:",
+                            choices = unique(final_baseball_430_csv$events)),
+                checkboxGroupInput("selectedInputs", "Choose Variables:",
+                                   choices = c("Exit Velocity" = "launch_speed",
+                                               "Launch Angle" = "launch_angle",
+                                               "Release Speed" = "release_speed",
+                                               "Release Spin Rate" = "release_spin_rate",
+                                               "Hit Coordinate X" = "hc_x",
+                                               "Hit Coordinate Y" = "hc_y",
+                                               "Horizontal Plate Location" = "plate_x",
+                                               "Vertical Plate Location" = "plate_z",
+                                               "Horizontal Movement" = "pfx_x",
+                                               "Vertical Movement" = "pfx_z"),
+                                   selected = c("launch_speed", "launch_angle")),
+                sliderInput("exitVelocity", "Exit Velocity (mph)", min = 50, max = 120, value = 90),
+                sliderInput("launchAngle", "Launch Angle (degrees)", min = -15, max = 45, value = 30),
+                sliderInput("releaseSpeed", "Release Speed (mph)", min = 50, max = 120, value = 90),
+                sliderInput("releaseSpinRate", "Release Spin Rate (rpm)", min = 0, max = 4000, value = 30),
+                sliderInput("hcx", "Hit Coordinate X", min = -45, max = 45, value = 0),
+                sliderInput("hcy", "Hit Coordinate Y", min = -45, max = 45, value = 0),
+                sliderInput("plate_x", "Horizontal Plate Location", min = -45, max = 45, value = 0),
+                sliderInput("plate_z", "Vertical Plate Location", min = -45, max = 45, value = 0),
+                sliderInput("pfx_x", "Horizontal Movement", min = -45, max = 45, value = 0),
+                sliderInput("pfx_z", "Vertical Movement", min = -45, max = 45, value = 0),
+                checkboxGroupInput("selectedInteractions", "Choose Interaction Terms:", choices = NULL),
+                actionButton("predictButton", "Predict Probability")
+              ),
+              mainPanel(
+                textOutput("probability"),
+                verbatimTextOutput("confusionMatrix"),
+                plotOutput("rocCurve")
+              )
+            )
+    ),
+    tabPanel("Probability Model Summary",
+             sidebarLayout(
+               sidebarPanel(
+                 checkboxGroupInput("selectedInputs3", "Choose Variables:",
+                                    choices = c("Exit Velocity" = "launch_speed",
+                                                "Launch Angle" = "launch_angle",
+                                                "Release Speed" = "release_speed",
+                                                "Release Spin Rate" = "release_spin_rate",
+                                                "Hit Coordinate X" = "hc_x",
+                                                "Hit Coordinate Y" = "hc_y",
+                                                "Horizontal Plate Location" = "plate_x",
+                                                "Vertical Plate Location" = "plate_z",
+                                                "Horizontal Movement" = "pfx_x",
+                                                "Vertical Movement" = "pfx_z"),
+                                    selected = c("launch_speed", "launch_angle")),
+                 checkboxGroupInput("selectedInteractions2", "Choose Interaction Terms:", choices = NULL),
+                 selectInput("Modeltype", "Type of Model", choices = NULL)
+               ),
+               verbatimTextOutput("modelSummary")
+             )
+    )
+  )
+)
+
+server <- function(input, output, session) {
+  data <- final_baseball_430_csv
+  
+  itrain <- sample(c(TRUE, FALSE), nrow(data), replace = TRUE, prob = c(0.7, 0.3))
+  train_data <- data[itrain, ]
+  test_data <- data[-itrain, ]
+  
+  observe({
+    variables <- colnames(final_baseball_430_csv %>% select("release_spin_rate", "launch_speed", "release_speed", "launch_angle", "hc_x", "hc_y", "pfx_x", 
+                                                 "pfx_z", "plate_x", "plate_z"))
+    updateSelectInput(session, "Var1", choices = variables)
+    updateSelectInput(session, "Var2", choices = variables)
+    updateCheckboxGroupInput(session, "selectedInteractions", choices = combn(variables, 2, paste, collapse = " * "), selected = NULL)
+    updateCheckboxGroupInput(session, "selectedInteractions2", choices = combn(variables, 2, paste, collapse = " * "), selected = NULL)
+  })
+  
+  observe({
+    updateSelectizeInput(session, "Player", choices = unique(data$batter_name), server = TRUE)
+    updateSelectInput(session, "pitchType", choices = unique(final_baseball_430_csv$pitch_type))
+    updateSelectInput(session, "selectedEvent", choices = unique(data$events))
+  })
+  
+  observe({
+    updateSelectizeInput(session, "Modeltype", choices = c("Logistic Model", "Multinomial Model"))
+  })
+  
+  output$distPlot <- renderPlot({
+    filtered_data <- data[data$batter_name == input$Player & data$pitch_type == input$pitchType, ]
+    
+    if (nrow(filtered_data) > 0) {
+      filtered_data = filtered_data %>%
+        mutate(outcome = ifelse(filtered_data$events == input$selectedEvent, input$selectedEvent, "Other Events"))
+      ggplot(filtered_data, aes_string(x = input$Var1, y = input$Var2, color = "outcome")) +
+        geom_point() +
+        labs(title = "Event Probability Analysis", x = input$Var1, y = input$Var2)
+    } else {
+      ggplot() + labs(title= "No Selected Data Available for selected criteria")
+    }
+  })
+  
+  observeEvent(input$predictButton, {
+    req(input$selectedEvent)
+    
+    main_effects <- paste(input$selectedInputs, collapse = " + ")
+    if ("launch_angle" %in% input$selectedInputs) {
+      sub("launch_angle", "launch_angle + I(launch_angle^2)", main_effects)
+    }
+    interaction_terms <- paste(input$selectedInteractions, collapse = " + ")
+    formula_string <- paste("as.factor(events == input$selectedEvent) ~", main_effects)
+    
+    if (interaction_terms != "") {
+      formula_string <- paste(formula_string, "+", interaction_terms)
+    }
+    
+    formula <- as.formula(formula_string)
+    
+    model <- glm(formula, data = train_data, family = binomial)
+    
+    predictions <- predict(model, newdata = data.frame(
+        launch_speed = input$exitVelocity,
+        launch_angle = input$launchAngle,
+        release_speed = input$releaseSpeed,
+        release_spin_rate = input$releaseSpinRate,
+        hc_x = input$hcx,
+        hc_y = input$hcy,
+        plate_x = input$plate_x,
+        plate_z = input$plate_z,
+        pfx_x = input$pfx_x,
+        pfx_z = input$pfx_z
+      ), type = "response")
+    
+    output$probability <- renderText({
+      paste("Probability of", input$selectedEvent, ":", round(predictions, 3))
+    })
+    
+    train_predictions <- predict(model, newdata = train_data, type = "response")
+    train_labels <- ifelse(train_predictions > 0.5, TRUE, FALSE)
+    
+    actual_labels <- train_data$events == input$selectedEvent
+    
+    levels <- c(FALSE, TRUE)
+    train_labels <- factor(train_labels, levels = levels)
+    actual_labels <- factor(actual_labels, levels = levels)
+    
+    confusion_matrix <- confusionMatrix(train_labels, actual_labels)
+    output$confusionMatrix <- renderPrint({
+      confusion_matrix
+    })
+    
+    roc_obj <- roc(actual_labels, train_predictions)
+    output$rocCurve <- renderPlot({
+      plot(roc_obj, main = "ROC Curve", col = "red", print.auc = TRUE)
+    })
+  })
+  
+  observe({
+    main_effects2 <- paste(input$selectedInputs3, collapse = " + ")
+    if ("launch_angle" %in% input$selectedInputs3) {
+      main_effects2 = sub("launch_angle", "launch_angle + I(launch_angle^2)", main_effects2)
+    }
+    interaction_terms2 <- paste(input$selectedInteractions2, collapse = " + ")
+    formula_string2 <- paste("as.factor(events == input$selectedEvent) ~", main_effects2)
+    formula_string3 <- paste("events ~", main_effects2)
+    
+    if (interaction_terms2 != "") {
+      formula_string2 <- paste(formula_string2, "+", interaction_terms2)
+      formula_string3 <- paste(formula_string3, "+", interaction_terms2)
+    }
+    
+    formula2 <- as.formula(formula_string2)
+    formula3 <- as.formula(formula_string3)
+    
+     if (input$Modeltype == "Logistic Model") {
+      model <- glm(formula2, data = data, family = binomial)
+    } else if (input$Modeltype == "Multinomial Model") {
+      model <- nnet::multinom(formula3, data = data)
+    }
+    
+    output$modelSummary <- renderPrint({
+      summary(model)
+    })
+  })
+  
+  output$baseballDataset <- renderDataTable({
+    datatable(data)
+  })
+}
+
+shinyApp(ui, server)
+```
+

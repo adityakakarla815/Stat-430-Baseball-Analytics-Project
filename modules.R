@@ -1,0 +1,1 @@
+final_baseball_430_csv = read.csv("sc_bip_small.csv") %>% mutate(home_run = if_else(events == "home_run", 1, 0)) %>% mutate(launch_speed = replace(launch_speed, is.na(launch_speed), 0), launch_angle = replace(launch_angle, is.na(launch_angle), 0))
